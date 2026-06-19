@@ -1,0 +1,19 @@
+### GET - CHECK TOKEN
+GET {{host}}/.well-known/paseto-keys
+
+### GET - GENERATE TOKEN
+GET {{host}}/generate-token
+
+### POST - LOGIN
+POST {{host}}/login
+
+### GET - VERIFY
+GET {{host}}/verify
+Authorization: {{token}}
+
+### GET - SAMPLE REQUEST WITH TOKEN
+GET {{host}}/me
+Authorization: {{token}}
+
+### GET - REFRESH
+GET {{host}}/refresh
