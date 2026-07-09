@@ -13,6 +13,8 @@ type FakeContextOptions = {
   reqHeaders?: Record<string, string>;
   onHeaderThrow?: boolean;
   routePath?: string;
+  jsonBody?: unknown;
+  jsonThrows?: boolean;
 };
 
 function createFakeContext(opts: FakeContextOptions = {}) {
@@ -40,6 +42,10 @@ function createFakeContext(opts: FakeContextOptions = {}) {
     req: {
       param: (name: string) => params[name],
       header: (name: string) => reqHeaders.get(name) ?? undefined,
+      json: async () => {
+        if (opts.jsonThrows) throw new Error("invalid json");
+        return opts.jsonBody ?? {};
+      },
       raw: rawRequest,
       routePath: opts.routePath ?? "",
     },
@@ -93,6 +99,8 @@ async function loadControllersWithFreshEnv() {
   const { publicKey, secretKey } = generateKeys("public");
   Deno.env.set("PASETO_PUBLIC_KEY", publicKey);
   Deno.env.set("PASETO_SECRET_KEY", secretKey);
+  Deno.env.set("SUPABASE_URL", "https://test.supabase.co");
+  Deno.env.set("SUPABASE_ANON_KEY", "anon-key");
   const mod = await import(`../src/controllers.ts?cache_bust=${crypto.randomUUID()}`);
 
   return { ...mod, publicKey, secretKey } as typeof import("../src/controllers.ts") & {
@@ -141,23 +149,135 @@ Deno.test("generateKeysAuth error path handled when env.set fails", async () => 
 
 Deno.test("login returns token response and sets cookie", async () => {
   const { login } = await loadControllersWithFreshEnv();
-  const { c, respHeaders } = createFakeContext();
-  const res = await login(c as any);
-  const body = (res as any).body as any;
-  assert(typeof body.access_token === "string" && body.access_token.length > 10);
-  assert("set-cookie" in respHeaders);
-  const sc = respHeaders["set-cookie"]!;
-  const cookieStr = Array.isArray(sc) ? sc.join("\n") : sc;
-  assert(String(cookieStr).includes("refresh_token="));
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({
+        user: { id: "user-1", email: "admin@example.com" },
+        session: { access_token: "supabase-token" },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    const { c, respHeaders } = createFakeContext({
+      jsonBody: {
+        email: "admin@example.com",
+        password: "password123",
+      },
+    });
+    const res = await login(c as any);
+    const body = (res as any).body as any;
+    assert(typeof body.access_token === "string" && body.access_token.length > 10);
+    assertEquals(body.user.id, "user-1");
+    assert("set-cookie" in respHeaders);
+    const sc = respHeaders["set-cookie"]!;
+    const cookieStr = Array.isArray(sc) ? sc.join("\n") : sc;
+    assert(String(cookieStr).includes("refresh_token="));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 Deno.test("login error path when response header setting fails", async () => {
   const { login } = await loadControllersWithFreshEnv();
-  const { c } = createFakeContext({ onHeaderThrow: true });
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({
+        user: { id: "user-2", email: "admin@example.com" },
+        session: { access_token: "supabase-token" },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    const { c } = createFakeContext({
+      onHeaderThrow: true,
+      jsonBody: {
+        email: "admin@example.com",
+        password: "password123",
+      },
+    });
+    const res = await login(c as any);
+    assertEquals((res as any).status, 500);
+    const body = (res as any).body as any;
+    assertEquals(body.error, "INTERNAL_SERVER_ERROR");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("login returns 400 when email/password are missing", async () => {
+  const { login } = await loadControllersWithFreshEnv();
+  const { c } = createFakeContext({ jsonBody: {} });
   const res = await login(c as any);
-  assertEquals((res as any).status, 500);
+  assertEquals((res as any).status, 400);
   const body = (res as any).body as any;
-  assertEquals(body.error, "INTERNAL_SERVER_ERROR");
+  assertEquals(body.error, "BAD_REQUEST");
+});
+
+Deno.test("register returns token response with profile_synced false when metadata is absent", async () => {
+  const { register } = await loadControllersWithFreshEnv();
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({
+        user: { id: "user-3", email: "new@example.com" },
+        session: { access_token: "supabase-token" },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    const { c } = createFakeContext({
+      jsonBody: {
+        email: "new@example.com",
+        password: "password123",
+      },
+    });
+    const res = await register(c as any);
+    const body = (res as any).body as any;
+    assert(typeof body.access_token === "string" && body.access_token.length > 10);
+    assertEquals(body.user.id, "user-3");
+    assertEquals(body.profile_synced, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("register saves profile metadata when metadata is provided", async () => {
+  const { register } = await loadControllersWithFreshEnv();
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  try {
+    globalThis.fetch = async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      return new Response(JSON.stringify({
+        user: { id: "user-4", email: "new2@example.com" },
+        session: { access_token: "supabase-token" },
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const { c } = createFakeContext({
+      jsonBody: {
+        email: "new2@example.com",
+        password: "password123",
+        metadata: { full_name: "New User" },
+      },
+    });
+    const res = await register(c as any);
+    const body = (res as any).body as any;
+    assertEquals(body.profile_synced, true);
+    assert(calls.some((url) => url.includes("/auth/v1/signup")));
+    assert(calls.some((url) => url.includes("/rest/v1/profile")));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 Deno.test("verify succeeds with valid Authorization token", async () => {

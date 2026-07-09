@@ -6,6 +6,33 @@ GET {{host}}/generate-token
 
 ### POST - LOGIN
 POST {{host}}/login
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "strong-password"
+}
+
+### POST - REGISTER (phase 1)
+POST {{host}}/register
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "strong-password"
+}
+
+### POST - REGISTER (phase 2 with metadata)
+POST {{host}}/register
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "strong-password",
+  "metadata": {
+    "full_name": "Example User"
+  }
+}
 
 ### GET - VERIFY
 GET {{host}}/verify

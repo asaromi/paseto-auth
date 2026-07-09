@@ -26,6 +26,142 @@ export type TTokenResponse = {
   timestamp: string;
 };
 
+type SupabaseAuthPayload = {
+  email: string;
+  password: string;
+};
+
+type SupabaseAuthResult = {
+  user: Record<string, unknown>;
+  session: Record<string, unknown>;
+};
+
+const getSupabaseUrl = (): string => {
+  const url = Deno.env.get("SUPABASE_URL");
+  if (!url) throw new Error("SUPABASE_URL is not set");
+  return url;
+};
+
+const getSupabaseAnonKey = (): string => {
+  const key = Deno.env.get("SUPABASE_ANON_KEY");
+  if (!key) throw new Error("SUPABASE_ANON_KEY is not set");
+  return key;
+};
+
+const supabaseErrorMessage = async (res: Response): Promise<string> => {
+  try {
+    const payload = await res.json();
+    return payload?.msg || payload?.error_description || payload?.error || payload?.message ||
+      `Supabase request failed (${res.status})`;
+  } catch {
+    return `Supabase request failed (${res.status})`;
+  }
+};
+
+const supabaseAuthRequest = async (
+  endpoint: string,
+  body: Record<string, unknown>,
+  options?: { invalidCredentialsOn400?: boolean },
+): Promise<SupabaseAuthResult> => {
+  const response = await fetch(`${getSupabaseUrl()}${endpoint}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": getSupabaseAnonKey(),
+      "Authorization": "Bearer " + getSupabaseAnonKey(),
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const message = await supabaseErrorMessage(response);
+    if (options?.invalidCredentialsOn400 && (response.status === 400 || response.status === 401)) {
+      throw new UnauthorizedError(message, "INVALID_CREDENTIALS");
+    }
+    throw new BadRequestError(message);
+  }
+
+  const data = await response.json();
+  return {
+    user: (data?.user || {}) as Record<string, unknown>,
+    session: (data?.session || {}) as Record<string, unknown>,
+  };
+};
+
+export const loginWithSupabase = async (
+  payload: SupabaseAuthPayload,
+): Promise<SupabaseAuthResult> => {
+  if (!payload?.email || !payload?.password) {
+    throw new BadRequestError("email and password are required");
+  }
+
+  return await supabaseAuthRequest(
+    "/auth/v1/token?grant_type=password",
+    payload,
+    { invalidCredentialsOn400: true },
+  );
+};
+
+export const saveProfileMetadata = async ({
+  userId,
+  metadata,
+  accessToken,
+}: {
+  userId: string;
+  metadata: Record<string, unknown>;
+  accessToken: string;
+}) => {
+  if (!metadata || Object.keys(metadata).length === 0) return;
+
+  const response = await fetch(`${getSupabaseUrl()}/rest/v1/profile?on_conflict=id`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": getSupabaseAnonKey(),
+      "Authorization": "Bearer " + accessToken,
+      "Prefer": "resolution=merge-duplicates,return=representation",
+    },
+    body: JSON.stringify([{ id: userId, ...metadata }]),
+  });
+
+  if (!response.ok) {
+    throw new BadRequestError(await supabaseErrorMessage(response));
+  }
+};
+
+export const registerWithSupabase = async ({
+  email,
+  password,
+  metadata,
+}: SupabaseAuthPayload & { metadata?: Record<string, unknown> }): Promise<SupabaseAuthResult & { profileSynced: boolean }> => {
+  if (!email || !password) {
+    throw new BadRequestError("email and password are required");
+  }
+
+  const authResult = await supabaseAuthRequest("/auth/v1/signup", {
+    email,
+    password,
+    options: metadata && Object.keys(metadata).length > 0 ? { data: metadata } : undefined,
+  });
+
+  const userId = String(authResult.user?.id || "");
+  const accessToken = String(authResult.session?.access_token || "");
+  const shouldSyncProfile = !!(metadata && Object.keys(metadata).length > 0 && userId && accessToken);
+
+  if (shouldSyncProfile) {
+    await saveProfileMetadata({
+      userId,
+      metadata: metadata as Record<string, unknown>,
+      accessToken,
+    });
+  }
+
+  return {
+    ...authResult,
+    profileSynced: shouldSyncProfile,
+  };
+};
+
 export const generateToken = async (
   payload: Record<string, unknown>,
   refreshPayload: (Partial<TTokenPayload> & Record<string, unknown>) = {},
@@ -114,7 +250,8 @@ export const getTokenResponse = ({
   context,
   accessToken,
   refreshToken,
-}: { context: Context; accessToken: string; refreshToken: string }) => {
+  user,
+}: { context: Context; accessToken: string; refreshToken: string; user?: Record<string, unknown> }) => {
   try {
     setCookie(context, "refresh_token", refreshToken, {
       httpOnly: true,
@@ -125,7 +262,7 @@ export const getTokenResponse = ({
 
     return {
       access_token: accessToken,
-      user: { id: 1, username: "admin" },
+      user: user || { id: 1, username: "admin" },
       timestamp: new Date().toISOString(),
     };
   } catch (error) {

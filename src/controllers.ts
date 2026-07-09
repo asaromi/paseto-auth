@@ -6,6 +6,8 @@ import { errorHandler } from "./helpers.ts";
 import {
   generateToken,
   getTokenResponse,
+  loginWithSupabase,
+  registerWithSupabase,
   refreshToken,
   verifyToken,
 } from "./services.ts";
@@ -26,12 +28,47 @@ export const generateKeysAuth = (c: Context) => {
 
 export const login = async (c: Context) => {
   try {
+    const body = await c.req.json();
+    const email = body?.email;
+    const password = body?.password;
+    if (!email || !password) {
+      throw new BadRequestError("email and password are required");
+    }
+
+    const authResult = await loginWithSupabase({ email, password });
+    const authUser = authResult.user || {};
     const tokens = await generateToken({
-      id: 1,
-      username: "admin",
+      id: authUser.id,
+      email: authUser.email,
     });
 
-    return c.json(getTokenResponse({ context: c, ...tokens }));
+    return c.json(getTokenResponse({ context: c, ...tokens, user: authUser }));
+  } catch (error) {
+    return errorHandler(c, error);
+  }
+};
+
+export const register = async (c: Context) => {
+  try {
+    const body = await c.req.json();
+    const email = body?.email;
+    const password = body?.password;
+    const metadata = body?.metadata && typeof body.metadata === "object" ? body.metadata : undefined;
+    if (!email || !password) {
+      throw new BadRequestError("email and password are required");
+    }
+
+    const authResult = await registerWithSupabase({ email, password, metadata });
+    const authUser = authResult.user || {};
+    const tokens = await generateToken({
+      id: authUser.id,
+      email: authUser.email,
+    });
+
+    return c.json({
+      ...getTokenResponse({ context: c, ...tokens, user: authUser }),
+      profile_synced: authResult.profileSynced,
+    });
   } catch (error) {
     return errorHandler(c, error);
   }
