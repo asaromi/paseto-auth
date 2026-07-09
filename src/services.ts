@@ -48,6 +48,8 @@ const getSupabaseAnonKey = (): string => {
   return key;
 };
 
+const getBearerToken = (token: string): string => "Bearer ".concat(token);
+
 const supabaseErrorMessage = async (res: Response): Promise<string> => {
   try {
     const payload = await res.json();
@@ -68,7 +70,7 @@ const supabaseAuthRequest = async (
     headers: {
       "Content-Type": "application/json",
       "apikey": getSupabaseAnonKey(),
-      "Authorization": "Bearer " + getSupabaseAnonKey(),
+      "Authorization": getBearerToken(getSupabaseAnonKey()),
     },
     body: JSON.stringify(body),
   });
@@ -118,7 +120,7 @@ export const saveProfileMetadata = async ({
     headers: {
       "Content-Type": "application/json",
       "apikey": getSupabaseAnonKey(),
-      "Authorization": "Bearer " + accessToken,
+      "Authorization": getBearerToken(accessToken),
       "Prefer": "resolution=merge-duplicates,return=representation",
     },
     body: JSON.stringify([{ id: userId, ...metadata }]),
@@ -147,6 +149,11 @@ export const registerWithSupabase = async ({
 
   const userId = String(authResult.user?.id || "");
   const accessToken = String(authResult.session?.access_token || "");
+  if (hasMetadata && (!userId || !accessToken)) {
+    throw new BadRequestError(
+      "Profile metadata sync failed due to missing user session from Supabase",
+    );
+  }
   const shouldSyncProfile = !!(hasMetadata && userId && accessToken);
 
   if (shouldSyncProfile) {
