@@ -254,11 +254,25 @@ Deno.test("register saves profile metadata when metadata is provided", async () 
     globalThis.fetch = async (input: string | URL | Request) => {
       const url = String(input);
       calls.push(url);
-      return new Response(JSON.stringify({
-        user: { id: "user-4", email: "new2@example.com" },
-        session: { access_token: "supabase-token" },
-      }), {
-        status: 200,
+      if (url.includes("/auth/v1/signup")) {
+        return new Response(JSON.stringify({
+          user: { id: "user-4", email: "new2@example.com" },
+          session: { access_token: "supabase-token" },
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url.includes("/rest/v1/profile")) {
+        return new Response(JSON.stringify([{ id: "user-4" }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({ message: "not found" }), {
+        status: 404,
         headers: { "content-type": "application/json" },
       });
     };

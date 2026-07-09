@@ -138,15 +138,16 @@ export const registerWithSupabase = async ({
     throw new BadRequestError("email and password are required");
   }
 
+  const hasMetadata = !!(metadata && Object.keys(metadata).length > 0);
   const authResult = await supabaseAuthRequest("/auth/v1/signup", {
     email,
     password,
-    options: metadata && Object.keys(metadata).length > 0 ? { data: metadata } : undefined,
+    ...(hasMetadata ? { options: { data: metadata } } : {}),
   });
 
   const userId = String(authResult.user?.id || "");
   const accessToken = String(authResult.session?.access_token || "");
-  const shouldSyncProfile = !!(metadata && Object.keys(metadata).length > 0 && userId && accessToken);
+  const shouldSyncProfile = !!(hasMetadata && userId && accessToken);
 
   if (shouldSyncProfile) {
     await saveProfileMetadata({
