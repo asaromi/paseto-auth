@@ -250,8 +250,9 @@ Deno.test("register saves profile metadata when metadata is provided", async () 
   const { register } = await loadControllersWithFreshEnv();
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
+  let profileRequestBody = "";
   try {
-    globalThis.fetch = async (input: string | URL | Request) => {
+    globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       calls.push(url);
       if (url.includes("/auth/v1/signup")) {
@@ -265,6 +266,7 @@ Deno.test("register saves profile metadata when metadata is provided", async () 
       }
 
       if (url.includes("/rest/v1/profile")) {
+        profileRequestBody = String(init?.body || "");
         return new Response(JSON.stringify([{ id: "user-4" }]), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -281,7 +283,7 @@ Deno.test("register saves profile metadata when metadata is provided", async () 
       jsonBody: {
         email: "new2@example.com",
         password: "password123",
-        metadata: { full_name: "New User" },
+        metadata: { full_name: "New User", unsafe: { nested: true } },
       },
     });
     const res = await register(c as any);
@@ -289,6 +291,8 @@ Deno.test("register saves profile metadata when metadata is provided", async () 
     assertEquals(body.profile_synced, true);
     assert(calls.some((url) => url.includes("/auth/v1/signup")));
     assert(calls.some((url) => url.includes("/rest/v1/profile")));
+    assert(profileRequestBody.includes("full_name"));
+    assertEquals(profileRequestBody.includes("unsafe"), false);
   } finally {
     globalThis.fetch = originalFetch;
   }

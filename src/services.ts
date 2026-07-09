@@ -36,6 +36,23 @@ type SupabaseAuthResult = {
   session: Record<string, unknown>;
 };
 
+const sanitizeMetadata = (
+  metadata?: Record<string, unknown>,
+): Record<string, string | number | boolean | null> => {
+  if (!metadata) return {};
+
+  const clean: Record<string, string | number | boolean | null> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    const isSafeKey = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key);
+    const isSafeValue = value === null || ["string", "number", "boolean"].includes(typeof value);
+    if (isSafeKey && isSafeValue) {
+      clean[key] = value as string | number | boolean | null;
+    }
+  }
+
+  return clean;
+};
+
 const getSupabaseUrl = (): string => {
   const url = Deno.env.get("SUPABASE_URL");
   if (!url) throw new Error("SUPABASE_URL is not set");
@@ -140,11 +157,12 @@ export const registerWithSupabase = async ({
     throw new BadRequestError("email and password are required");
   }
 
-  const hasMetadata = !!(metadata && Object.keys(metadata).length > 0);
+  const sanitizedMetadata = sanitizeMetadata(metadata);
+  const hasMetadata = Object.keys(sanitizedMetadata).length > 0;
   const authResult = await supabaseAuthRequest("/auth/v1/signup", {
     email,
     password,
-    ...(hasMetadata ? { options: { data: metadata } } : {}),
+    ...(hasMetadata ? { options: { data: sanitizedMetadata } } : {}),
   });
 
   const userId = String(authResult.user?.id || "");
@@ -159,7 +177,7 @@ export const registerWithSupabase = async ({
   if (shouldSyncProfile) {
     await saveProfileMetadata({
       userId,
-      metadata: metadata as Record<string, unknown>,
+      metadata: sanitizedMetadata,
       accessToken,
     });
   }
