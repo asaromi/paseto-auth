@@ -1,37 +1,54 @@
 import { Context, Next } from "hono";
 import { getCookie } from "hono/cookie";
-import { generateKeys } from "paseto-ts/v4";
-import { BadRequestError, UnauthorizedError } from "./exceptions.ts";
+import { UnauthorizedError } from "./exceptions.ts";
 import { errorHandler } from "./helpers.ts";
 import {
-  generateToken,
   getTokenResponse,
-  refreshToken,
-  verifyToken,
+  loginWithSupabase,
+  registerWithSupabase,
 } from "./services.ts";
+import { paseto } from "./utils.ts";
 
-export const generateKeysAuth = (c: Context) => {
+const { generateToken, refreshToken, verifyToken } = paseto;
+
+export const login = async (c: Context) => {
   try {
-    // paseto-ts/v4 typings only expose 'public' purpose; use public keypair
-    const { publicKey, secretKey } = generateKeys("public");
+    const body = await c.req.json();
+    const authResult = await loginWithSupabase(body);
+    const tokens = await generateToken({
+      id: authResult.id,
+      email: authResult.email,
+    });
 
-    Deno.env.set("PASETO_PUBLIC_KEY", publicKey);
-    Deno.env.set("PASETO_SECRET_KEY", secretKey);
-
-    return c.json({ public_key: publicKey, secret_key: secretKey });
+    return c.json(
+      getTokenResponse({
+        context: c,
+        ...tokens,
+        user: authResult as unknown as Record<string, unknown>,
+      }),
+    );
   } catch (error) {
     return errorHandler(c, error);
   }
 };
 
-export const login = async (c: Context) => {
+export const register = async (c: Context) => {
   try {
+    const { email, password, profile: metadata } = await c.req.json();
+    const authResult = await registerWithSupabase({
+      email,
+      password,
+      metadata,
+    });
     const tokens = await generateToken({
-      id: 1,
-      username: "admin",
+      id: authResult.id,
+      email: authResult.email,
     });
 
-    return c.json(getTokenResponse({ context: c, ...tokens }));
+    return c.json({
+      ...getTokenResponse({ context: c, ...tokens, user: authResult }),
+      profile_synced: authResult.isSyncedMetadata,
+    });
   } catch (error) {
     return errorHandler(c, error);
   }

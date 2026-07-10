@@ -1,10 +1,11 @@
 import { Hono } from "hono";
-import { login, refresh, verify } from "./controllers.ts";
+import { login, refresh, register, verify } from "./controllers.ts";
 
 export const routers = new Hono();
 
 routers.get("/", (c) => c.text("Hello Hono!"));
 routers.post("/login", login);
+routers.post("/register", register);
 routers.get("/verify", verify);
 routers.get("/refresh", refresh);
 routers.get("/me", verify, (c) => c.json({ message: "Hello, me!" }))
