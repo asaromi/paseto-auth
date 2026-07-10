@@ -92,7 +92,7 @@ Deno.test("refreshToken issues new tokens based on valid refresh token", async (
 Deno.test("refreshToken throws BadRequestError when refToken is missing", async () => {
   // @ts-ignore - testing runtime behavior with undefined param
   await assertRejects(
-    () => refreshToken(undefined),
+    () => refreshToken(""),
     Error,
     "Missing refresh token",
   );
