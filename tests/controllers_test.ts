@@ -100,7 +100,7 @@ async function loadControllersWithFreshEnv() {
   Deno.env.set("PASETO_PUBLIC_KEY", publicKey);
   Deno.env.set("PASETO_SECRET_KEY", secretKey);
   Deno.env.set("SUPABASE_URL", "https://test.supabase.co");
-  Deno.env.set("SUPABASE_ANON_KEY", "anon-key");
+  Deno.env.set("SUPABASE_PUBLISHABLE_KEY", "anon-key");
   const mod = await import(`../src/controllers.ts?cache_bust=${crypto.randomUUID()}`);
 
   return { ...mod, publicKey, secretKey } as typeof import("../src/controllers.ts") & {
