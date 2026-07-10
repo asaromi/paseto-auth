@@ -1,6 +1,3 @@
-### GET - CHECK TOKEN
-GET {{host}}/.well-known/paseto-keys
-
 ### GET - GENERATE TOKEN
 GET {{host}}/generate-token
 
@@ -9,17 +6,8 @@ POST {{host}}/login
 Content-Type: application/json
 
 {
-  "email": "user@example.com",
-  "password": "strong-password"
-}
-
-### POST - REGISTER (phase 1)
-POST {{host}}/register
-Content-Type: application/json
-
-{
-  "email": "user@example.com",
-  "password": "strong-password"
+  "email": {{email}},
+  "password": {{password}}
 }
 
 ### POST - REGISTER (phase 2 with metadata)
@@ -27,9 +15,9 @@ POST {{host}}/register
 Content-Type: application/json
 
 {
-  "email": "user@example.com",
-  "password": "strong-password",
-  "metadata": {
+  "email": {{email}},
+  "password": {{password}},
+  "profile": {
     "full_name": "Example User"
   }
 }

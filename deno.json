@@ -1,6 +1,7 @@
 {
   "imports": {
     "@std/dotenv": "jsr:@std/dotenv@~0.225.7",
+    "@supabase/supabase-js": "jsr:@supabase/supabase-js@^2.0.6",
     "hono": "https://esm.sh/hono@4.4.7",
     "hono/cors": "https://esm.sh/hono@4.4.7/cors",
     "hono/cookie": "https://esm.sh/hono@4.4.7/cookie",

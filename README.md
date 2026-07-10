@@ -10,7 +10,7 @@ Set these environment variables:
 
 ```bash
 SUPABASE_URL=https://<project-ref>.supabase.co
-SUPABASE_ANON_KEY=<supabase-anon-key>
+SUPABASE_PUBLISHABLE_KEY=<supabase-anon-key>
 ```
 
 ### Phase 1 (required auth fields only)

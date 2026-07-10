@@ -3,7 +3,16 @@ import { ErrorCode, ErrorResponse } from "./exceptions.ts";
 
 export const isDebug = Deno.env.get("DEBUG") === "true";
 
-export const handleAuthLibError = (error: any): { code: number; error: ErrorCode; message: string } => {
+export const debug = (...args: unknown[]) => {
+  if (!isDebug) return;
+
+  const logging = args[0] instanceof Error ? console.error : console.log;
+  return logging(...args);
+};
+
+export const handleAuthLibError = (
+  error: any,
+): { code: number; error: ErrorCode; message: string } => {
   try {
     const response: { code: number; error: ErrorCode; message: string } = {
       code: 401,
@@ -17,7 +26,7 @@ export const handleAuthLibError = (error: any): { code: number; error: ErrorCode
 
     response.message = code ? `[${code}] ` : "";
     response.message += name ? `${name}: ` : "";
-    response.message += (message || "");
+    response.message += message || "";
     // Normalize colons out of the whole assembled message
     response.message = response.message.replaceAll(":", ",");
 
