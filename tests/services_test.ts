@@ -1,96 +1,40 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
-import { generateKeys, sign } from "paseto-ts/v4";
 
-// Utility to (re)initialize env keys before importing the services module
-async function loadServices() {
-  const { publicKey, secretKey } = generateKeys("public");
-  Deno.env.set("PASETO_PUBLIC_KEY", publicKey);
-  Deno.env.set("PASETO_SECRET_KEY", secretKey);
-  // Re-import to ensure it reads current env values (module cache busting via unique query)
-  const mod = await import(`../src/services.ts?cache_bust=${crypto.randomUUID()}`);
-  return { ...mod, publicKey, secretKey } as typeof import("../src/services.ts") & {
-    publicKey: string;
-    secretKey: string;
+// SUPABASE_* env vars are read once at module-eval time (src/utils.ts), so
+// they must be set before src/services.ts is ever imported in this process.
+Deno.env.set("SUPABASE_URL", "https://test.supabase.co");
+Deno.env.set("SUPABASE_PUBLISHABLE_KEY", "test-anon-key");
+Deno.env.set("PASETO_PUBLIC_KEY", "unused-in-these-tests");
+Deno.env.set("PASETO_SECRET_KEY", "unused-in-these-tests");
+
+const { loginWithSupabase, registerWithSupabase, getTokenResponse } =
+  await import(
+    "../src/services.ts"
+  );
+
+const VALID_PASSWORD = "Password123!";
+const VALID_FULL_NAME = "Jane Doe";
+
+function mockSupabaseAuthFetch(
+  matchPath: string,
+  responseBody: unknown,
+  status = 200,
+) {
+  return async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.includes(matchPath)) {
+      return new Response(JSON.stringify(responseBody), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ message: "not found" }), {
+      status: 404,
+    });
   };
 }
 
-Deno.test("generateToken returns both access and refresh tokens that are verifiable", async () => {
-  const { generateToken, publicKey } = await loadServices();
-  const { accessToken, refreshToken } = await generateToken({ id: 42, role: "admin" });
-
-  assert(typeof accessToken === "string" && accessToken.length > 10);
-  assert(typeof refreshToken === "string" && refreshToken.length > 10);
-
-  // Verify using library to ensure tokens are well-formed and signed with the public key
-  const { payload: accessPayload } = await (await import("paseto-ts/v4")).verify(publicKey, accessToken);
-  const { payload: refreshPayload } = await (await import("paseto-ts/v4")).verify(publicKey, refreshToken);
-  assertEquals(accessPayload.id, 42);
-  assertEquals(accessPayload.role, "admin");
-  assertEquals(refreshPayload.id, 42);
-  assertEquals(refreshPayload.role, "admin");
-});
-
-Deno.test("verifyToken succeeds for valid, non-expired token", async () => {
-  const { verifyToken, secretKey } = await loadServices();
-  const now = Date.now();
-  const token = await sign(secretKey, {
-    sub: "user-1",
-    iat: new Date(now).toISOString(),
-    exp: new Date(now + 60_000).toISOString(),
-  });
-  const res = await verifyToken(token);
-  assertEquals(res.payload.sub, "user-1");
-  assert(typeof res.exp === "string");
-  assert(typeof res.iat === "string");
-});
-
-Deno.test("verifyToken throws UnauthorizedError for expired token", async () => {
-  const { verifyToken, secretKey } = await loadServices();
-  const now = Date.now();
-  // Create a token that expires almost immediately, then wait a bit to ensure expiry
-  const soonExpiring = await sign(secretKey, {
-    sub: "user-1",
-    iat: new Date(now - 120_000).toISOString(),
-    exp: new Date(now + 10).toISOString(),
-  });
-  // small delay to ensure token is expired by the time we verify
-  await new Promise((r) => setTimeout(r, 15));
-  await assertRejects(
-    () => verifyToken(soonExpiring),
-    Error,
-    "Session expired",
-  );
-});
-
-Deno.test("verifyToken rejects for invalid token (wrong key)", async () => {
-  const { verifyToken } = await loadServices();
-  const otherKeys = generateKeys("public");
-  const badToken = await sign(otherKeys.secretKey, {
-    foo: "bar",
-    iat: new Date().toISOString(),
-    exp: new Date(Date.now() + 60_000).toISOString(),
-  });
-  await assertRejects(() => verifyToken(badToken));
-});
-
-Deno.test("refreshToken issues new tokens based on valid refresh token", async () => {
-  const { refreshToken, secretKey, publicKey } = await loadServices();
-  // Create a refresh token that is valid for some time
-  const now = Date.now();
-  const refToken = await sign(secretKey, {
-    uid: 7,
-    iat: new Date(now).toISOString(),
-    exp: new Date(now + 7 * 60 * 60 * 1000).toISOString(),
-  });
-  const { accessToken, refreshToken: newRefresh } = await refreshToken(refToken);
-  assert(accessToken && newRefresh);
-  // Ensure the new access token verifies with public key and contains payload
-  const verified = await (await import("paseto-ts/v4")).verify(publicKey, accessToken);
-  assertEquals(verified.payload.uid, 7);
-});
-
-Deno.test("getTokenResponse sets refresh cookie and returns response payload", async () => {
-  const { getTokenResponse } = await loadServices();
+Deno.test("getTokenResponse sets refresh cookie and returns response payload", () => {
   const headers: Record<string, string | string[]> = {};
   const fakeContext: any = {
     header: (name: string, value: string) => {
@@ -100,7 +44,6 @@ Deno.test("getTokenResponse sets refresh cookie and returns response payload", a
         headers[key] = value;
       } else if (Array.isArray(existing)) {
         existing.push(value);
-        headers[key] = existing;
       } else {
         headers[key] = [existing, value];
       }
@@ -114,49 +57,150 @@ Deno.test("getTokenResponse sets refresh cookie and returns response payload", a
 
   assertEquals(result.access_token, "access-abc");
   assertEquals(result.user.username, "admin");
-  // hono/cookie sets cookie via context.header("Set-Cookie", ...)
-  // Our mock stores header names in lowercase
   assert("set-cookie" in headers);
   const cookieVal = headers["set-cookie"];
-  if (Array.isArray(cookieVal)) {
-    const joined = cookieVal.join("\n");
-    assert(joined.includes("refresh_token="));
-  } else {
-    assert(String(cookieVal).includes("refresh_token="));
+  const cookieStr = Array.isArray(cookieVal)
+    ? cookieVal.join("\n")
+    : String(cookieVal);
+  assert(cookieStr.includes("refresh_token="));
+});
+
+Deno.test("loginWithSupabase throws BadRequestError when email/password are missing", async () => {
+  await assertRejects(
+    // @ts-ignore - testing runtime behavior with an incomplete payload
+    () => loginWithSupabase({ email: "", password: "" }),
+    Error,
+    "email and password are required",
+  );
+});
+
+Deno.test("loginWithSupabase returns the Supabase user on success", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = mockSupabaseAuthFetch("/auth/v1/token", {
+      access_token: "supabase-access-token",
+      token_type: "bearer",
+      expires_in: 3600,
+      refresh_token: "supabase-refresh-token",
+      user: { id: "user-1", email: "admin@example.com" },
+    });
+
+    const user = await loginWithSupabase({
+      email: "admin@example.com",
+      password: VALID_PASSWORD,
+    });
+    assertEquals(user.id, "user-1");
+    assertEquals(user.email, "admin@example.com");
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
-Deno.test("verifyToken throws BadRequestError when token is missing", async () => {
-  const { verifyToken } = await loadServices();
-  await assertRejects(() => verifyToken(""), Error, "Missing token");
+Deno.test("loginWithSupabase throws BadRequestError when Supabase returns an error", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = mockSupabaseAuthFetch(
+      "/auth/v1/token",
+      {
+        error: "invalid_grant",
+        error_description: "Invalid login credentials",
+      },
+      400,
+    );
+
+    await assertRejects(
+      () =>
+        loginWithSupabase({
+          email: "admin@example.com",
+          password: "wrong-password",
+        }),
+      Error,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
-Deno.test("refreshToken throws BadRequestError when refToken is missing", async () => {
-  const { refreshToken } = await loadServices();
-  // Expect the service to throw its own specific message for missing refresh token
-  // @ts-ignore - testing runtime behavior with undefined param
-  await assertRejects(() => refreshToken(undefined), Error, "Missing refresh token");
+Deno.test("registerWithSupabase throws BadRequestError when email is missing", async () => {
+  await assertRejects(
+    () =>
+      registerWithSupabase({
+        email: "",
+        password: VALID_PASSWORD,
+        metadata: { full_name: VALID_FULL_NAME },
+      }),
+    Error,
+    "Email is required",
+  );
 });
 
-Deno.test("refreshToken rejects expired refresh token", async () => {
-  const { refreshToken, secretKey } = await loadServices();
-  const now = Date.now();
-  const expSoon = await sign(secretKey, {
-    sub: "u1",
-    iat: new Date(now - 120_000).toISOString(),
-    exp: new Date(now + 5).toISOString(),
-  });
-  await new Promise((r) => setTimeout(r, 10));
-  await assertRejects(() => refreshToken(expSoon), Error, "Session expired");
+Deno.test("registerWithSupabase throws BadRequestError when password is missing", async () => {
+  await assertRejects(
+    () =>
+      registerWithSupabase({
+        email: "new@example.com",
+        password: "",
+        metadata: { full_name: VALID_FULL_NAME },
+      }),
+    Error,
+    "Password is required",
+  );
 });
 
-Deno.test("refreshToken rejects invalid refresh token (wrong key)", async () => {
-  const { refreshToken } = await loadServices();
-  const other = generateKeys("public");
-  const badRef = await sign(other.secretKey, {
-    sub: "x",
-    iat: new Date().toISOString(),
-    exp: new Date(Date.now() + 60_000).toISOString(),
-  });
-  await assertRejects(() => refreshToken(badRef), Error, "Invalid token");
+Deno.test("registerWithSupabase throws BadRequestError when full_name is missing", async () => {
+  await assertRejects(
+    () =>
+      registerWithSupabase({
+        email: "new@example.com",
+        password: VALID_PASSWORD,
+      }),
+    Error,
+    "Invalid full name format",
+  );
+});
+
+Deno.test("registerWithSupabase returns user with isSyncedMetadata on success", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = mockSupabaseAuthFetch("/auth/v1/signup", {
+      access_token: "supabase-access-token",
+      token_type: "bearer",
+      expires_in: 3600,
+      refresh_token: "supabase-refresh-token",
+      user: { id: "user-2", email: "new@example.com" },
+    });
+
+    const result = await registerWithSupabase({
+      email: "new@example.com",
+      password: VALID_PASSWORD,
+      metadata: { full_name: VALID_FULL_NAME },
+    });
+    assertEquals(result.id, "user-2");
+    assertEquals(result.isSyncedMetadata, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("registerWithSupabase throws BadRequestError when Supabase returns an error", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = mockSupabaseAuthFetch(
+      "/auth/v1/signup",
+      { error: "email_exists", error_description: "Email already registered" },
+      400,
+    );
+
+    await assertRejects(
+      () =>
+        registerWithSupabase({
+          email: "existing@example.com",
+          password: VALID_PASSWORD,
+          metadata: { full_name: VALID_FULL_NAME },
+        }),
+      Error,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
